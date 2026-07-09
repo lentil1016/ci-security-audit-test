@@ -61,6 +61,8 @@ jobs:
     uses: ./.github/workflows/_security_audit.yml
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+      SECURITY_AUDIT_MODEL: ${{ secrets.SECURITY_AUDIT_MODEL }}
 
   # ============================================================
   # Job 3: Tests (placeholder for future GPU tests)

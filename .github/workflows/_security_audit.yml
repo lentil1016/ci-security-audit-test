@@ -6,6 +6,12 @@ on:
       ANTHROPIC_API_KEY:
         description: "API key for LLM audit layer (optional; layer skipped if not provided)"
         required: false
+      ANTHROPIC_BASE_URL:
+        description: "Custom API base URL (optional; defaults to https://api.anthropic.com)"
+        required: false
+      SECURITY_AUDIT_MODEL:
+        description: "Model to use for LLM audit (optional; defaults to claude-sonnet-4-20250514)"
+        required: false
 
 jobs:
   security-audit:
@@ -32,4 +38,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+          SECURITY_AUDIT_MODEL: ${{ secrets.SECURITY_AUDIT_MODEL }}
         run: python3 .github/scripts/security_audit.py
