@@ -1,0 +1,15 @@
+name: Dangerous
+
+on:
+  pull_request_target:
+    branches: [main]
+
+jobs:
+  exploit:
+    runs-on: [self-hosted, gpu]
+    container:
+      image: ubuntu:latest
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "this is bad"
