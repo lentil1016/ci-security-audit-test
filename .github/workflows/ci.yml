@@ -13,6 +13,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   # ============================================================
@@ -45,9 +46,9 @@ jobs:
   # Job 2: Security Audit (three-level response)
   #
   # Automatically analyzes PR diffs for security risks:
-  #   BLOCK → pipeline stops (immediate attack surface expansion)
-  #   WARN  → PR comment posted, pipeline continues
-  #   PASS  → all clear
+  #   BLOCK -> pipeline stops (immediate attack surface expansion)
+  #   WARN  -> PR comment posted, pipeline continues
+  #   PASS  -> all clear
   #
   # Project owners can skip by adding 'skip-security-audit' label.
   # ============================================================
