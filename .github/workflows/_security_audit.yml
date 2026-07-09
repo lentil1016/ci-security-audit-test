@@ -1,0 +1,30 @@
+name: Security Audit
+
+on:
+  workflow_call:
+
+jobs:
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write  # needed for posting comments
+    steps:
+      - name: Checkout (attempt 1)
+        id: checkout1
+        uses: actions/checkout@v4
+        continue-on-error: true
+      - name: Checkout (attempt 2)
+        if: steps.checkout1.outcome == 'failure'
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run security audit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/security_audit.py

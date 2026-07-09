@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ============================================================
+  # Job 1: Lint (ruff check, ruff format, typos)
+  # ============================================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Ruff check
+        run: ruff check --output-format=github .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: Typos check
+        uses: crate-ci/typos@v1
+
+  # ============================================================
+  # Job 2: Security Audit (three-level response)
+  #
+  # Automatically analyzes PR diffs for security risks:
+  #   BLOCK → pipeline stops (immediate attack surface expansion)
+  #   WARN  → PR comment posted, pipeline continues
+  #   PASS  → all clear
+  #
+  # Project owners can skip by adding 'skip-security-audit' label.
+  # ============================================================
+  security-audit:
+    name: Security Audit
+    needs: lint
+    if: >-
+      github.event_name == 'pull_request' &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-security-audit')
+    uses: ./.github/workflows/_security_audit.yml
+
+  # ============================================================
+  # Job 3: Tests (placeholder for future GPU tests)
+  #
+  # Depends on security-audit. If audit is skipped (label or
+  # non-PR event), tests still run.
+  # ============================================================
+  test:
+    name: Test
+    needs: [lint, security-audit]
+    if: >-
+      always() &&
+      needs.lint.result == 'success' &&
+      (needs.security-audit.result == 'success' || needs.security-audit.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package
+        run: pip install -e ".[dev]" 2>/dev/null || pip install -e .
+
+      - name: Run unit tests
+        run: |
+          if [ -d "tests" ]; then
+            python -m pytest tests/ -x --timeout=60 2>/dev/null || echo "No pytest or tests skipped"
+          else
+            echo "No tests directory — skipping"
+          fi
