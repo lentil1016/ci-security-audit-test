@@ -6,6 +6,10 @@ Analyzes PR diffs for security risks and responds with:
   - WARN:  long-term risks if merged → PR comment, pipeline continues
   - PASS:  no issues found → pipeline continues
 
+Two-layer architecture:
+  Layer 1: Deterministic regex rules (zero cost, zero latency)
+  Layer 2: LLM semantic analysis (catches novel/obfuscated attacks)
+
 Usage:
   In CI:  python3 security_audit.py
   Local:  python3 security_audit.py --pr 42 --repo owner/repo
@@ -14,6 +18,7 @@ Environment:
   GITHUB_EVENT_NAME   - "pull_request" or other
   GITHUB_REPOSITORY   - owner/repo
   GH_TOKEN            - GitHub token (for posting comments)
+  ANTHROPIC_API_KEY   - API key for LLM audit layer (optional; skipped if absent)
 
 When not in CI (no GITHUB_EVENT_NAME), runs in local/dry-run mode.
 """
@@ -25,6 +30,9 @@ import os
 import re
 import subprocess
 import sys
+import traceback
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -286,6 +294,252 @@ def run_audit(hunks: list[DiffHunk]) -> AuditResult:
 
 
 # ============================================================
+# LLM Audit Layer
+# ============================================================
+
+# Files that are security-relevant and should be sent to LLM
+CI_FILE_PATTERNS = [
+    re.compile(r"\.github/"),
+    re.compile(r"Dockerfile"),
+    re.compile(r"docker-compose"),
+    re.compile(r"Makefile"),
+    re.compile(r"\.sh$"),
+    re.compile(r"Jenkinsfile"),
+    re.compile(r"\.gitlab-ci"),
+    re.compile(r"Taskfile"),
+]
+
+LLM_SYSTEM_PROMPT = """\
+You are a CI/CD security auditor. Your task is to review PR diff changes and \
+identify security risks that static regex rules might miss.
+
+You ONLY focus on:
+- Privilege escalation (token permissions, container capabilities, sudo)
+- Supply chain attacks (dependency injection, action hijacking, typosquatting)
+- Data exfiltration paths (network calls to untrusted domains, env leaks)
+- Security gate bypass attempts (disabling checks, weakening conditions)
+- Obfuscated malicious code (base64 encoding, variable concatenation, eval tricks)
+- Credential exposure (hardcoded secrets, token logging, debug output of secrets)
+
+You do NOT care about:
+- Code style or formatting
+- Functional correctness
+- Performance
+- Documentation
+
+For each finding, assign a severity:
+- "block": Immediately exploitable or clearly malicious. Examples: reverse shells, \
+token exfiltration, pull_request_target with checkout, disabling security gates.
+- "warn": Risky pattern that warrants human review but may be intentional. Examples: \
+broad permissions, unpinned dependencies, network calls to unfamiliar domains.
+
+If there are no security issues, return an empty findings array.
+
+Respond ONLY with valid JSON matching this schema:
+{
+  "findings": [
+    {
+      "severity": "block" | "warn",
+      "file": "<file path>",
+      "line": <line number or null>,
+      "rule": "llm_<short_snake_case_id>",
+      "message": "<concise description of the risk>",
+      "reasoning": "<brief explanation of why this is dangerous>"
+    }
+  ],
+  "summary": "<one sentence overall assessment>"
+}
+"""
+
+
+def _is_ci_relevant(file_path: str) -> bool:
+    """Check if a file is CI/infrastructure-relevant."""
+    return any(p.search(file_path) for p in CI_FILE_PATTERNS)
+
+
+def _prepare_llm_input(hunks: list[DiffHunk]) -> Optional[str]:
+    """Extract CI-relevant diff content for LLM review.
+
+    Returns None if no CI-relevant files were changed.
+    """
+    relevant_parts: list[str] = []
+
+    for hunk in hunks:
+        if not _is_ci_relevant(hunk.file):
+            continue
+        lines_text = "\n".join(line_text for _, line_text in hunk.lines)
+        if lines_text.strip():
+            relevant_parts.append(f"=== {hunk.file} ===\n{lines_text}")
+
+    if not relevant_parts:
+        return None
+
+    return "\n\n".join(relevant_parts)
+
+
+def _call_anthropic_api(diff_content: str) -> Optional[dict]:
+    """Call Claude API via urllib (no external dependencies).
+
+    Returns parsed JSON response or None on failure.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get(
+        "ANTHROPIC_AUTH_TOKEN"
+    )
+    if not api_key:
+        return None
+
+    # Use Sonnet for good balance of speed/cost/capability
+    model = os.environ.get("SECURITY_AUDIT_MODEL", "claude-sonnet-4-20250514")
+
+    payload = {
+        "model": model,
+        "max_tokens": 2048,
+        "system": LLM_SYSTEM_PROMPT,
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Review the following CI/infrastructure diff for security risks.\n\n"
+                    f"```diff\n{diff_content}\n```"
+                ),
+            }
+        ],
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+    }
+
+    req = urllib.request.Request(
+        f"{os.environ.get('ANTHROPIC_BASE_URL', 'https://api.anthropic.com')}/v1/messages",
+        data=json.dumps(payload).encode(),
+        headers=headers,
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            response_data = json.loads(resp.read().decode())
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
+        print(f"::warning::LLM audit: API call failed ({e})", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"::warning::LLM audit: unexpected error ({e})", file=sys.stderr)
+        return None
+
+    # Extract text content from response
+    content_blocks = response_data.get("content", [])
+    text_content = ""
+    for block in content_blocks:
+        if block.get("type") == "text":
+            text_content += block.get("text", "")
+
+    if not text_content:
+        print("::warning::LLM audit: empty response", file=sys.stderr)
+        return None
+
+    # Parse JSON from response (handle markdown code fences)
+    text_content = text_content.strip()
+    if text_content.startswith("```"):
+        # Strip code fence
+        lines = text_content.splitlines()
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text_content = "\n".join(lines)
+
+    try:
+        return json.loads(text_content)
+    except json.JSONDecodeError as e:
+        print(
+            f"::warning::LLM audit: failed to parse response as JSON ({e})",
+            file=sys.stderr,
+        )
+        return None
+
+
+def run_llm_audit(hunks: list[DiffHunk]) -> list[Finding]:
+    """Run LLM-based security audit on CI-relevant diff portions.
+
+    Returns list of findings from LLM. Returns empty list on any failure
+    (graceful degradation — LLM failure never blocks the pipeline by itself).
+    """
+    # Check if LLM audit is enabled
+    if not (
+        os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+    ):
+        print("::notice::LLM audit layer skipped (ANTHROPIC_API_KEY not set)")
+        return []
+
+    # Only audit CI-relevant files
+    diff_content = _prepare_llm_input(hunks)
+    if diff_content is None:
+        print("::notice::LLM audit layer skipped (no CI-relevant files changed)")
+        return []
+
+    print("Running LLM security audit...", file=sys.stderr)
+
+    try:
+        response = _call_anthropic_api(diff_content)
+    except Exception:
+        print(
+            f"::warning::LLM audit: exception during API call\n{traceback.format_exc()}",
+            file=sys.stderr,
+        )
+        return []
+
+    if response is None:
+        return []
+
+    # Parse findings from LLM response
+    findings: list[Finding] = []
+    llm_findings = response.get("findings", [])
+
+    for f in llm_findings:
+        severity_str = f.get("severity", "warn")
+        try:
+            severity = Severity(severity_str)
+        except ValueError:
+            severity = Severity.WARN
+
+        rule = f.get("rule", "llm_unknown")
+        if not rule.startswith("llm_"):
+            rule = f"llm_{rule}"
+
+        reasoning = f.get("reasoning", "")
+        message = f.get("message", "LLM-detected issue")
+        if reasoning:
+            message = f"{message} (Reasoning: {reasoning})"
+
+        findings.append(
+            Finding(
+                severity=severity,
+                rule=rule,
+                file=f.get("file", "unknown"),
+                line=f.get("line"),
+                message=message,
+            )
+        )
+
+    summary = response.get("summary", "")
+    if summary:
+        print(f"LLM audit summary: {summary}", file=sys.stderr)
+
+    if findings:
+        print(
+            f"LLM audit found {len(findings)} issue(s).",
+            file=sys.stderr,
+        )
+    else:
+        print("LLM audit: no issues found.", file=sys.stderr)
+
+    return findings
+
+
+# ============================================================
 # Output formatting
 # ============================================================
 
@@ -401,6 +655,11 @@ def main() -> None:
     # Parse and audit
     hunks = parse_diff(diff_text)
     result = run_audit(hunks)
+
+    # Layer 2: LLM audit (only if static rules didn't already BLOCK)
+    if not result.has_blockers:
+        llm_findings = run_llm_audit(hunks)
+        result.findings.extend(llm_findings)
 
     # Output
     format_github_output(result)

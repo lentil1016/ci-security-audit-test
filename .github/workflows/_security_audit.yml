@@ -2,6 +2,10 @@ name: Security Audit
 
 on:
   workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        description: "API key for LLM audit layer (optional; layer skipped if not provided)"
+        required: false
 
 jobs:
   security-audit:
@@ -27,4 +31,5 @@ jobs:
       - name: Run security audit
         env:
           GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python3 .github/scripts/security_audit.py

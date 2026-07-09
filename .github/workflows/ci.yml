@@ -59,6 +59,8 @@ jobs:
       github.event_name == 'pull_request' &&
       !contains(github.event.pull_request.labels.*.name, 'skip-security-audit')
     uses: ./.github/workflows/_security_audit.yml
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
   # ============================================================
   # Job 3: Tests (placeholder for future GPU tests)
