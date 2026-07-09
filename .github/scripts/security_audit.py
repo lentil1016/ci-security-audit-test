@@ -109,7 +109,9 @@ BLOCK_RULES = [
 WARN_RULES = [
     {
         "id": "permissions_widened",
-        "pattern": re.compile(r"^\+\s*permissions:\s*(write-all|contents:\s*write|actions:\s*write)"),
+        "pattern": re.compile(
+            r"^\+\s*permissions:\s*(write-all|contents:\s*write|actions:\s*write)"
+        ),
         "message": "Workflow permissions widened — verify this is intentional",
         "file_filter": re.compile(r"\.github/workflows/.*\.ya?ml$"),
     },
@@ -139,7 +141,9 @@ WARN_RULES = [
     },
     {
         "id": "external_network_curl",
-        "pattern": re.compile(r"^\+.*\b(curl|wget)\b.*https?://(?!github\.com|pypi\.org|registry\.npmmirror)"),
+        "pattern": re.compile(
+            r"^\+.*\b(curl|wget)\b.*https?://(?!github\.com|pypi\.org|registry\.npmmirror)"
+        ),
         "message": "External network request added — verify the target domain is trusted",
         "file_filter": None,
     },
@@ -292,7 +296,9 @@ def format_github_output(result: AuditResult) -> None:
 
     if result.has_blockers:
         summary_lines.append("## 🚫 Security Audit: BLOCKED\n")
-        summary_lines.append("The following changes immediately expand the attack surface and must be fixed:\n")
+        summary_lines.append(
+            "The following changes immediately expand the attack surface and must be fixed:\n"
+        )
         for f in result.blockers:
             loc = f"{f.file}:{f.line}" if f.line else f.file
             summary_lines.append(f"- **[{f.rule}]** `{loc}`: {f.message}")
@@ -300,7 +306,9 @@ def format_github_output(result: AuditResult) -> None:
             print(f"::error file={f.file},line={f.line or 1}::[{f.rule}] {f.message}")
     elif result.warnings:
         summary_lines.append("## ⚠️ Security Audit: WARNINGS\n")
-        summary_lines.append("The following changes introduce long-term risks. Please review before merging:\n")
+        summary_lines.append(
+            "The following changes introduce long-term risks. Please review before merging:\n"
+        )
     else:
         summary_lines.append("## ✅ Security Audit: PASSED\n")
         summary_lines.append("No security issues detected.")
@@ -350,7 +358,9 @@ def post_pr_comment(result: AuditResult) -> None:
     for f in result.warnings:
         loc = f"`{f.file}:{f.line}`" if f.line else f"`{f.file}`"
         body_lines.append(f"| {f.rule} | {loc} | {f.message} |")
-    body_lines.append("\n---\n*To skip security audit, add the `skip-security-audit` label (CODEOWNERS only).*")
+    body_lines.append(
+        "\n---\n*To skip security audit, add the `skip-security-audit` label (CODEOWNERS only).*"
+    )
 
     body = "\n".join(body_lines)
 
@@ -372,7 +382,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="CI Security Audit")
     parser.add_argument("--pr", type=int, help="PR number (for local testing)")
     parser.add_argument("--repo", type=str, help="Repository (owner/repo)")
-    parser.add_argument("--diff-file", type=str, help="Read diff from file instead of gh CLI")
+    parser.add_argument(
+        "--diff-file", type=str, help="Read diff from file instead of gh CLI"
+    )
     args = parser.parse_args()
 
     # Get diff
@@ -399,10 +411,16 @@ def main() -> None:
 
     # Exit code
     if result.has_blockers:
-        print(f"\n❌ Audit BLOCKED: {len(result.blockers)} critical issue(s) found.", file=sys.stderr)
+        print(
+            f"\n❌ Audit BLOCKED: {len(result.blockers)} critical issue(s) found.",
+            file=sys.stderr,
+        )
         sys.exit(1)
     elif result.warnings:
-        print(f"\n⚠️  Audit passed with {len(result.warnings)} warning(s).", file=sys.stderr)
+        print(
+            f"\n⚠️  Audit passed with {len(result.warnings)} warning(s).",
+            file=sys.stderr,
+        )
         sys.exit(0)
     else:
         print("\n✅ Audit passed.", file=sys.stderr)
